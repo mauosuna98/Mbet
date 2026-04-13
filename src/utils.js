@@ -32,11 +32,23 @@ export const MOODS = [
   { emoji: '😵', label: 'Perdido', value: 'chasing' },
 ];
 
+// Convert decimal odds to American format
+export function toAmerican(decimal) {
+  const d = parseFloat(decimal);
+  if (!d || d <= 1) return '—';
+  if (d >= 2) {
+    return '+' + Math.round((d - 1) * 100);
+  } else {
+    return '-' + Math.round(100 / (d - 1));
+  }
+}
+
 // Format helpers
 export const fmt = {
   money: (n) => `${n >= 0 ? '' : '-'}$${Math.abs(n).toFixed(2)}`,
   moneySign: (n) => `${n >= 0 ? '+' : ''}$${n.toFixed(2)}`,
   pct: (n) => `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`,
+  odds: (decimal) => toAmerican(decimal),
   date: (iso) => new Date(iso).toLocaleDateString('es-MX', { day: '2-digit', month: 'short' }),
   dateLong: (iso) => new Date(iso).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' }),
 };
@@ -52,12 +64,14 @@ export function betOdds(bet) {
   return parseFloat(bet.odds || 0);
 }
 export function betReturn(bet) {
-  if (bet.status !== 'won') return 0;
-  return bet.stake * betOdds(bet);
+  if (bet.status === 'won') return bet.stake * betOdds(bet);
+  if (bet.status === 'cashout') return bet.cashoutAmount || 0;
+  return 0;
 }
 export function betProfit(bet) {
   if (bet.status === 'won') return bet.stake * (betOdds(bet) - 1);
   if (bet.status === 'lost') return -bet.stake;
+  if (bet.status === 'cashout') return (bet.cashoutAmount || 0) - bet.stake;
   return 0;
 }
 
@@ -65,28 +79,36 @@ export function betProfit(bet) {
 export function computeStats(bets, movements) {
   const deposits = movements.filter(m => m.type === 'deposit').reduce((s, m) => s + m.amount, 0);
   const withdrawals = movements.filter(m => m.type === 'withdrawal').reduce((s, m) => s + m.amount, 0);
-  const settled = bets.filter(b => b.status === 'won' || b.status === 'lost');
+  const settled = bets.filter(b => b.status === 'won' || b.status === 'lost' || b.status === 'cashout');
   const totalStaked = settled.reduce((s, b) => s + b.stake, 0);
   const totalReturn = settled.reduce((s, b) => s + betReturn(b), 0);
   const profit = totalReturn - totalStaked;
   const roi = totalStaked > 0 ? (profit / totalStaked) * 100 : 0;
   const wonCount = bets.filter(b => b.status === 'won').length;
   const lostCount = bets.filter(b => b.status === 'lost').length;
+  const cashoutCount = bets.filter(b => b.status === 'cashout').length;
   const pendingCount = bets.filter(b => b.status === 'pending').length;
-  const winRate = (wonCount + lostCount) > 0 ? (wonCount / (wonCount + lostCount)) * 100 : 0;
+  // Cashouts con profit > 0 cuentan como win, <= 0 como loss
+  const cashoutWins = bets.filter(b => b.status === 'cashout' && betProfit(b) > 0).length;
+  const cashoutLosses = bets.filter(b => b.status === 'cashout' && betProfit(b) <= 0).length;
+  const totalWins = wonCount + cashoutWins;
+  const totalLosses = lostCount + cashoutLosses;
+  const winRate = (totalWins + totalLosses) > 0 ? (totalWins / (totalWins + totalLosses)) * 100 : 0;
   const pendingStake = bets.filter(b => b.status === 'pending').reduce((s, b) => s + b.stake, 0);
   const bankroll = deposits - withdrawals + profit - pendingStake;
   const avgStake = bets.length > 0 ? bets.reduce((s, b) => s + b.stake, 0) / bets.length : 0;
 
-  // Current streak: consecutive same-result bets from the end
+  // Current streak based on profit/loss (not just status)
   const sortedSettled = [...settled].sort((a, b) => new Date(a.date) - new Date(b.date));
   let currentStreak = 0;
   let currentStreakType = null;
   for (let i = sortedSettled.length - 1; i >= 0; i--) {
+    const isWin = betProfit(sortedSettled[i]) > 0;
+    const type = isWin ? 'won' : 'lost';
     if (currentStreakType === null) {
-      currentStreakType = sortedSettled[i].status;
+      currentStreakType = type;
       currentStreak = 1;
-    } else if (sortedSettled[i].status === currentStreakType) {
+    } else if (type === currentStreakType) {
       currentStreak++;
     } else break;
   }
@@ -94,13 +116,14 @@ export function computeStats(bets, movements) {
   // Best/worst historical streak
   let bestWinStreak = 0, bestLossStreak = 0, tmpW = 0, tmpL = 0;
   sortedSettled.forEach(b => {
-    if (b.status === 'won') { tmpW++; tmpL = 0; bestWinStreak = Math.max(bestWinStreak, tmpW); }
-    else if (b.status === 'lost') { tmpL++; tmpW = 0; bestLossStreak = Math.max(bestLossStreak, tmpL); }
+    const isWin = betProfit(b) > 0;
+    if (isWin) { tmpW++; tmpL = 0; bestWinStreak = Math.max(bestWinStreak, tmpW); }
+    else { tmpL++; tmpW = 0; bestLossStreak = Math.max(bestLossStreak, tmpL); }
   });
 
   return {
     deposits, withdrawals, totalStaked, totalReturn, profit, roi,
-    wonCount, lostCount, pendingCount, winRate, pendingStake, bankroll,
+    wonCount, lostCount, cashoutCount, pendingCount, winRate, pendingStake, bankroll,
     avgStake, currentStreak, currentStreakType, bestWinStreak, bestLossStreak,
   };
 }
@@ -108,13 +131,14 @@ export function computeStats(bets, movements) {
 // Stats grouped by key extractor
 export function groupStats(bets, keyFn) {
   const groups = {};
-  bets.filter(b => b.status === 'won' || b.status === 'lost').forEach(b => {
+  bets.filter(b => b.status === 'won' || b.status === 'lost' || b.status === 'cashout').forEach(b => {
     const k = keyFn(b);
     if (!k) return;
     if (!groups[k]) groups[k] = { key: k, staked: 0, returned: 0, won: 0, lost: 0 };
     groups[k].staked += b.stake;
     groups[k].returned += betReturn(b);
-    if (b.status === 'won') groups[k].won++;
+    const isWin = betProfit(b) > 0;
+    if (isWin) groups[k].won++;
     else groups[k].lost++;
   });
   return Object.values(groups).map(g => ({
@@ -128,7 +152,7 @@ export function groupStats(bets, keyFn) {
 export function bankrollEvolution(bets, movements) {
   const events = [];
   movements.forEach(m => events.push({ date: m.date, delta: m.type === 'deposit' ? m.amount : -m.amount, type: 'mov' }));
-  bets.filter(b => b.status === 'won' || b.status === 'lost').forEach(b => {
+  bets.filter(b => b.status === 'won' || b.status === 'lost' || b.status === 'cashout').forEach(b => {
     events.push({ date: b.date, delta: betProfit(b), type: 'bet' });
   });
   events.sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -142,12 +166,13 @@ export function bankrollEvolution(bets, movements) {
 // Monthly aggregation
 export function monthlyStats(bets) {
   const months = {};
-  bets.filter(b => b.status === 'won' || b.status === 'lost').forEach(b => {
+  bets.filter(b => b.status === 'won' || b.status === 'lost' || b.status === 'cashout').forEach(b => {
     const m = b.date.substring(0, 7); // YYYY-MM
     if (!months[m]) months[m] = { month: m, staked: 0, profit: 0, won: 0, lost: 0 };
     months[m].staked += b.stake;
     months[m].profit += betProfit(b);
-    if (b.status === 'won') months[m].won++;
+    const isWin = betProfit(b) > 0;
+    if (isWin) months[m].won++;
     else months[m].lost++;
   });
   return Object.values(months).sort((a, b) => a.month.localeCompare(b.month));
