@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Wallet, Plus, Minus, Camera, Brain, BarChart3, Trophy, Target, DollarSign, Activity, X, Loader, Sparkles, ArrowUpRight, ArrowDownRight, Settings, Key, Flame, Snowflake, Calendar, TrendingUp, AlertTriangle, CheckCircle, Filter } from 'lucide-react';
 import { LS, callClaude, SPORTS, fmt, computeStats, groupStats, bankrollEvolution, monthlyStats, todayBets, betProfit, betOdds } from './utils';
 import { Kpi, ActionBtn, ModalShell, BetRow, LineChart, styles } from './components';
-import { BetModal, MovementModal, TicketModal, SettingsModal, CloseDayModal } from './modals';
+import { BetModal, MovementModal, TicketModal, SettingsModal, CloseDayModal, CashoutModal } from './modals';
 
 export default function Mbet() {
   const [tab, setTab] = useState('dashboard');
@@ -17,6 +17,7 @@ export default function Mbet() {
   const [showTicketModal, setShowTicketModal] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showCloseDay, setShowCloseDay] = useState(false);
+  const [cashoutBet, setCashoutBet] = useState(null);
 
   // Filters for bets tab
   const [filters, setFilters] = useState({ sport: '', status: '', bookmaker: '', from: '', to: '' });
@@ -375,7 +376,7 @@ export default function Mbet() {
                 {[...filteredBets].reverse().map(b => (
                   <BetRow key={b.id} bet={b} onUpdate={(status) => {
                     saveBets(bets.map(x => x.id === b.id ? { ...x, status } : x));
-                  }} onDelete={() => {
+                  }} onCashout={() => setCashoutBet(b)} onDelete={() => {
                     saveBets(bets.filter(x => x.id !== b.id));
                   }} />
                 ))}
@@ -454,6 +455,10 @@ export default function Mbet() {
       {showCloseDay && <CloseDayModal onClose={() => setShowCloseDay(false)} todayStats={todayStats} onSave={(closing) => {
         saveDayClosings([...dayClosings.filter(d => d.date !== closing.date), closing]);
         setShowCloseDay(false);
+      }} />}
+      {cashoutBet && <CashoutModal bet={cashoutBet} onClose={() => setCashoutBet(null)} onSave={(updated) => {
+        saveBets(bets.map(x => x.id === updated.id ? updated : x));
+        setCashoutBet(null);
       }} />}
     </div>
   );
@@ -731,7 +736,7 @@ function ProbBar({ label, pct, fairOdds, highlight }) {
           {highlight && '★ '}{label}
         </div>
         <div style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
-          <div className="mono" style={{ fontSize: 10, color: '#9ca39a' }}>@{fairOdds?.toFixed(2)}</div>
+          <div className="mono" style={{ fontSize: 10, color: '#9ca39a' }}>{fmt.odds(fairOdds)}</div>
           <div className="display" style={{ fontSize: 18, color: highlight ? '#d4af37' : '#e8e6df' }}>{pct}%</div>
         </div>
       </div>
