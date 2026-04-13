@@ -123,7 +123,8 @@ export function BetModal({ onClose, onSave, defaultBookmaker, bankroll }) {
             </button>
             <div style={{ padding: 12, background: 'rgba(212,175,55,0.08)', borderRadius: 10, textAlign: 'center' }}>
               <div className="mono" style={{ fontSize: 9, color: '#9ca39a', letterSpacing: '0.15em' }}>CUOTA COMBINADA</div>
-              <div className="display gold" style={{ fontSize: 28 }}>{parlayOdds.toFixed(2)}</div>
+              <div className="display gold" style={{ fontSize: 28 }}>{fmt.odds(parlayOdds)}</div>
+              <div className="mono" style={{ fontSize: 9, color: '#9ca39a' }}>({parlayOdds.toFixed(2)} decimal)</div>
             </div>
             <div><label>Apuesta $</label><input type="number" step="0.01" inputMode="decimal" value={form.stake} onChange={e => setForm({...form, stake: e.target.value})} placeholder="100"/></div>
           </>
@@ -441,6 +442,58 @@ export function SettingsModal({ onClose, apiKey, onSave, limits, onLimitsChange,
           </button>
         </div>
       )}
+    </ModalShell>
+  );
+}
+
+export function CashoutModal({ bet, onClose, onSave }) {
+  const [amount, setAmount] = useState('');
+  const amountNum = parseFloat(amount) || 0;
+  const profit = amountNum - bet.stake;
+  const potentialProfit = bet.stake * (betOdds(bet) - 1);
+
+  const submit = () => {
+    if (!amount || amountNum < 0) return;
+    onSave({ ...bet, status: 'cashout', cashoutAmount: amountNum });
+  };
+
+  return (
+    <ModalShell onClose={onClose} title="CERRAR APUESTA">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ padding: 14, background: 'rgba(0,0,0,0.3)', borderRadius: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
+            {bet.type === 'parlay' ? `Parlay (${bet.selections?.length || 0})` : bet.event}
+          </div>
+          <div className="mono" style={{ fontSize: 10, color: '#9ca39a' }}>
+            Apostado: ${bet.stake.toFixed(2)} · Ganancia potencial: +${potentialProfit.toFixed(2)}
+          </div>
+        </div>
+
+        <div style={{ padding: 12, background: 'rgba(212,175,55,0.06)', borderRadius: 10, fontSize: 11, color: '#9ca39a', lineHeight: 1.5 }}>
+          Ingresa cuánto recibiste al cerrar la apuesta anticipadamente. Mbet calculará tu ganancia o pérdida real.
+        </div>
+
+        <div>
+          <label>Monto recibido del cashout</label>
+          <input type="number" step="0.01" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" autoFocus/>
+        </div>
+
+        {amountNum > 0 && (
+          <div style={{ padding: 14, background: profit >= 0 ? 'rgba(74,222,128,0.08)' : 'rgba(248,113,113,0.08)', border: '1px solid ' + (profit >= 0 ? 'rgba(74,222,128,0.3)' : 'rgba(248,113,113,0.3)'), borderRadius: 10, textAlign: 'center' }}>
+            <div className="mono" style={{ fontSize: 9, color: '#9ca39a', letterSpacing: '0.15em', marginBottom: 4 }}>RESULTADO REAL</div>
+            <div className="display" style={{ fontSize: 32, color: profit >= 0 ? '#4ade80' : '#f87171' }}>
+              {fmt.moneySign(profit)}
+            </div>
+            <div style={{ fontSize: 11, color: '#9ca39a', marginTop: 4 }}>
+              {profit >= 0 ? '🟢 Ganancia' : '🔴 Pérdida'} vs stake original
+            </div>
+          </div>
+        )}
+
+        <button onClick={submit} disabled={!amount} style={{...styles.primaryBtn, opacity: !amount ? 0.5 : 1}}>
+          CONFIRMAR CASHOUT
+        </button>
+      </div>
     </ModalShell>
   );
 }
