@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Wallet, Plus, Minus, Camera, Brain, BarChart3, Trophy, Target, DollarSign, Activity, X, Loader, Sparkles, ArrowUpRight, ArrowDownRight, Settings, Key, Flame, Snowflake, Calendar, TrendingUp, AlertTriangle, CheckCircle, Filter } from 'lucide-react';
 import { LS, callClaude, SPORTS, fmt, computeStats, groupStats, bankrollEvolution, monthlyStats, todayBets, betProfit, betOdds } from './utils';
 import { Kpi, ActionBtn, ModalShell, BetRow, LineChart, styles } from './components';
-import { BetModal, MovementModal, TicketModal, SettingsModal, CloseDayModal, CashoutModal } from './modals';
+import { BetModal, MovementModal, TicketModal, SettingsModal, CloseDayModal, CashoutModal, WinBonusModal } from './modals';
 
 export default function Mbet() {
   const [tab, setTab] = useState('dashboard');
@@ -18,6 +18,7 @@ export default function Mbet() {
   const [showSettings, setShowSettings] = useState(false);
   const [showCloseDay, setShowCloseDay] = useState(false);
   const [cashoutBet, setCashoutBet] = useState(null);
+  const [winBonusBet, setWinBonusBet] = useState(null);
 
   // Filters for bets tab
   const [filters, setFilters] = useState({ sport: '', status: '', bookmaker: '', from: '', to: '' });
@@ -38,7 +39,11 @@ export default function Mbet() {
   const saveDayClosings = (d) => { setDayClosings(d); LS.set('mbet:dayClosings', d); };
 
   const stats = useMemo(() => computeStats(bets, movements), [bets, movements]);
-  const sportStats = useMemo(() => groupStats(bets, b => b.type === 'parlay' ? 'Combinada' : b.sport), [bets]);
+  const sportStats = useMemo(() => groupStats(bets, b => {
+    if (b.type === 'parlay') return 'Parlay';
+    if (b.type === 'sgp') return b.sport || 'SGP';
+    return b.sport;
+  }), [bets]);
   const bookmakerStats = useMemo(() => groupStats(bets, b => b.bookmaker || null), [bets]);
   const bankrollData = useMemo(() => bankrollEvolution(bets, movements), [bets, movements]);
   const monthly = useMemo(() => monthlyStats(bets), [bets]);
@@ -110,7 +115,11 @@ export default function Mbet() {
   // Filtered bets
   const filteredBets = useMemo(() => {
     return bets.filter(b => {
-      if (filters.sport && b.sport !== filters.sport && !(b.type === 'parlay' && filters.sport === 'Combinada')) return false;
+      if (filters.sport) {
+        if (filters.sport === 'Parlay' && b.type !== 'parlay') return false;
+        else if (filters.sport === 'SGP' && b.type !== 'sgp') return false;
+        else if (filters.sport !== 'Parlay' && filters.sport !== 'SGP' && b.sport !== filters.sport) return false;
+      }
       if (filters.status && b.status !== filters.status) return false;
       if (filters.bookmaker && b.bookmaker !== filters.bookmaker) return false;
       if (filters.from && b.date < filters.from) return false;
@@ -332,7 +341,7 @@ export default function Mbet() {
                   <div><label>Deporte</label>
                     <select value={filters.sport} onChange={e => setFilters({...filters, sport: e.target.value})}>
                       <option value="">Todos</option>
-                      {[...SPORTS, 'Combinada'].map(s => <option key={s}>{s}</option>)}
+                      {[...SPORTS, 'Parlay', 'SGP'].map(s => <option key={s}>{s}</option>)}
                     </select>
                   </div>
                   <div><label>Estado</label>
@@ -375,7 +384,11 @@ export default function Mbet() {
               <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 {[...filteredBets].reverse().map(b => (
                   <BetRow key={b.id} bet={b} onUpdate={(status) => {
-                    saveBets(bets.map(x => x.id === b.id ? { ...x, status } : x));
+                    if (status === 'won') {
+                      setWinBonusBet(b);
+                    } else {
+                      saveBets(bets.map(x => x.id === b.id ? { ...x, status } : x));
+                    }
                   }} onCashout={() => setCashoutBet(b)} onDelete={() => {
                     saveBets(bets.filter(x => x.id !== b.id));
                   }} />
@@ -459,6 +472,10 @@ export default function Mbet() {
       {cashoutBet && <CashoutModal bet={cashoutBet} onClose={() => setCashoutBet(null)} onSave={(updated) => {
         saveBets(bets.map(x => x.id === updated.id ? updated : x));
         setCashoutBet(null);
+      }} />}
+      {winBonusBet && <WinBonusModal bet={winBonusBet} onClose={() => setWinBonusBet(null)} onSave={(updated) => {
+        saveBets(bets.map(x => x.id === updated.id ? updated : x));
+        setWinBonusBet(null);
       }} />}
     </div>
   );
@@ -750,4 +767,3 @@ function ProbBar({ label, pct, fairOdds, highlight }) {
       </div>
     </div>
   );
-}
