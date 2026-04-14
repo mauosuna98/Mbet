@@ -1,32 +1,81 @@
 import React, { useState, useRef } from 'react';
 import { Camera, Loader, Sparkles, Plus, Trash2, X, Key, Download, Upload } from 'lucide-react';
-import { callClaude, SPORTS, MOODS, fmt, kellyStake, betOdds, betProfit, toCSV, fromCSV, downloadFile, computeStats } from './utils';
+import { callClaude, SPORTS, MARKETS, MOODS, fmt, kellyStake, betOdds, betProfit, toCSV, fromCSV, downloadFile, computeStats, parseVs, betTitle, fromAmerican, toAmerican } from './utils';
 import { ModalShell, styles } from './components';
+
+// Reusable selection row used in parlays/SGPs
+function SelectionFields({ sel, onChange, onRemove, showRemove, showSport, compact }) {
+  return (
+    <div style={{ padding: 12, background: 'rgba(0,0,0,0.3)', borderRadius: 10, border: '1px solid rgba(212,175,55,0.1)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <div className="mono gold" style={{ fontSize: 10, letterSpacing: '0.1em' }}>{sel.__label || 'SELECCIÓN'}</div>
+        {showRemove && (
+          <button onClick={onRemove} style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', padding: 2 }}><Trash2 size={14}/></button>
+        )}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {!compact && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <input value={sel.home || ''} onChange={e => onChange('home', e.target.value)} placeholder="Equipo local" style={{ fontSize: 13, padding: '8px 10px' }}/>
+            <input value={sel.away || ''} onChange={e => onChange('away', e.target.value)} placeholder="Equipo visit." style={{ fontSize: 13, padding: '8px 10px' }}/>
+          </div>
+        )}
+        <select value={sel.market || 'Ganador'} onChange={e => onChange('market', e.target.value)} style={{ fontSize: 13, padding: '8px 10px' }}>
+          {MARKETS.map(m => <option key={m}>{m}</option>)}
+        </select>
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 8 }}>
+          <input value={sel.pick || ''} onChange={e => onChange('pick', e.target.value)} placeholder="Pick / Selección" style={{ fontSize: 13, padding: '8px 10px' }}/>
+          <input value={sel.line || ''} onChange={e => onChange('line', e.target.value)} placeholder="Línea (ej: 2+)" style={{ fontSize: 13, padding: '8px 10px' }}/>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: showSport ? '1fr 1fr' : '1fr', gap: 8 }}>
+          {showSport && (
+            <select value={sel.sport || 'Fútbol'} onChange={e => onChange('sport', e.target.value)} style={{ fontSize: 13, padding: '8px 10px' }}>
+              {SPORTS.map(s => <option key={s}>{s}</option>)}
+            </select>
+          )}
+          <input type="text" inputMode="numeric" value={sel.odds || ''} onChange={e => onChange('odds', e.target.value)} placeholder="+150 / -200" style={{ fontSize: 13, padding: '8px 10px' }}/>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function BetModal({ onClose, onSave, defaultBookmaker, bankroll }) {
   const [mode, setMode] = useState('single');
   const [form, setForm] = useState({
-    event: '', sport: 'Fútbol', pick: '', odds: '', stake: '',
+    home: '', away: '', eventText: '',
+    sport: 'Fútbol', market: 'Ganador', line: '', pick: '', odds: '', stake: '',
     bookmaker: defaultBookmaker || '', notes: '', date: new Date().toISOString().split('T')[0],
   });
+  // For SGP we need a shared match (home/away/sport) + multiple picks
+  const [sgpMatch, setSgpMatch] = useState({ home: '', away: '', sport: 'Fútbol' });
   const [selections, setSelections] = useState([
-    { event: '', sport: 'Fútbol', pick: '', odds: '' },
-    { event: '', sport: 'Fútbol', pick: '', odds: '' },
+    { home: '', away: '', sport: 'Fútbol', market: 'Ganador', line: '', pick: '', odds: '' },
+    { home: '', away: '', sport: 'Fútbol', market: 'Ganador', line: '', pick: '', odds: '' },
   ]);
   const [showKelly, setShowKelly] = useState(false);
   const [kellyProb, setKellyProb] = useState('');
+
+  // Smart parse: when user types "Team A vs Team B" in eventText, fill home/away
+  const handleEventText = (text) => {
+    setForm(f => ({ ...f, eventText: text }));
+    if (text.toLowerCase().includes(' vs')) {
+      const { home, away } = parseVs(text);
+      setForm(f => ({ ...f, eventText: text, home, away }));
+    }
+  };
 
   const updateSel = (i, field, val) => {
     const next = [...selections];
     next[i] = { ...next[i], [field]: val };
     setSelections(next);
   };
-  const addSel = () => setSelections([...selections, { event: '', sport: 'Fútbol', pick: '', odds: '' }]);
+  const addSel = () => setSelections([...selections, { home: '', away: '', sport: 'Fútbol', market: 'Ganador', line: '', pick: '', odds: '' }]);
   const removeSel = (i) => setSelections(selections.filter((_, idx) => idx !== i));
 
-  const parlayOdds = selections.reduce((p, s) => p * (parseFloat(s.odds) || 1), 1);
-  const singleOdds = parseFloat(form.odds) || 0;
-  const effectiveOdds = mode === 'parlay' ? parlayOdds : singleOdds;
+  const parlayOdds = selections.reduce((p, s) => p * (fromAmerican(s.odds) || 1), 1);
+  const singleOdds = fromAmerican(form.odds) || 0;
+  const effectiveOdds = mode === 'single' ? singleOdds : parlayOdds;
   const stake = parseFloat(form.stake) || 0;
   const potential = stake * (effectiveOdds - 1);
 
@@ -43,79 +92,110 @@ export function BetModal({ onClose, onSave, defaultBookmaker, bankroll }) {
       bookmaker: form.bookmaker,
       notes: form.notes,
     };
-    if (mode === 'parlay') {
-      if (selections.length < 2 || selections.some(s => !s.event || !s.pick || !s.odds)) return;
+    if (mode === 'single') {
+      if (!form.pick || !form.odds || !form.stake) return;
+      const decimalOdds = fromAmerican(form.odds);
+      if (!decimalOdds) return;
+      onSave({
+        ...base,
+        type: 'single',
+        home: form.home,
+        away: form.away,
+        sport: form.sport,
+        market: form.market,
+        line: form.line,
+        pick: form.pick,
+        odds: decimalOdds,
+      });
+    } else if (mode === 'parlay') {
+      if (selections.length < 2 || selections.some(s => !s.pick || !s.odds || !fromAmerican(s.odds))) return;
       if (!form.stake) return;
       onSave({
         ...base,
         type: 'parlay',
-        selections: selections.map(s => ({ ...s, odds: parseFloat(s.odds) })),
+        selections: selections.map(s => ({ ...s, odds: fromAmerican(s.odds) })),
       });
-    } else {
-      if (!form.event || !form.pick || !form.odds || !form.stake) return;
+    } else if (mode === 'sgp') {
+      if (selections.length < 2 || selections.some(s => !s.pick || !s.odds || !fromAmerican(s.odds))) return;
+      if (!form.stake || !sgpMatch.home || !sgpMatch.away) return;
       onSave({
         ...base,
-        type: 'single',
-        event: form.event,
-        sport: form.sport,
-        pick: form.pick,
-        odds: parseFloat(form.odds),
+        type: 'sgp',
+        home: sgpMatch.home,
+        away: sgpMatch.away,
+        sport: sgpMatch.sport,
+        selections: selections.map(s => ({
+          ...s,
+          home: sgpMatch.home,
+          away: sgpMatch.away,
+          sport: sgpMatch.sport,
+          odds: fromAmerican(s.odds),
+        })),
       });
     }
   };
 
   return (
     <ModalShell onClose={onClose} title="NUEVA APUESTA">
-      <div style={{ display: 'flex', gap: 6, marginBottom: 16, background: 'rgba(0,0,0,0.4)', padding: 4, borderRadius: 10 }}>
-        <button onClick={() => setMode('single')} style={{
-          flex: 1, padding: 10, border: 'none', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer',
-          background: mode === 'single' ? 'linear-gradient(180deg, #d4af37, #b8941f)' : 'transparent',
-          color: mode === 'single' ? '#0a0d0a' : '#9ca39a',
-        }}>SIMPLE</button>
-        <button onClick={() => setMode('parlay')} style={{
-          flex: 1, padding: 10, border: 'none', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer',
-          background: mode === 'parlay' ? 'linear-gradient(180deg, #d4af37, #b8941f)' : 'transparent',
-          color: mode === 'parlay' ? '#0a0d0a' : '#9ca39a',
-        }}>COMBINADA</button>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 16, background: 'rgba(0,0,0,0.4)', padding: 4, borderRadius: 10 }}>
+        {[['single', 'SIMPLE'], ['parlay', 'PARLAY'], ['sgp', 'SGP']].map(([id, label]) => (
+          <button key={id} onClick={() => setMode(id)} style={{
+            flex: 1, padding: 10, border: 'none', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: 'pointer',
+            background: mode === id ? 'linear-gradient(180deg, #d4af37, #b8941f)' : 'transparent',
+            color: mode === id ? '#0a0d0a' : '#9ca39a',
+          }}>{label}</button>
+        ))}
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {mode === 'single' ? (
+        {mode === 'single' && (
           <>
-            <div><label>Evento</label><input value={form.event} onChange={e => setForm({...form, event: e.target.value})} placeholder="Real Madrid vs Barcelona"/></div>
-            <div><label>Deporte</label>
-              <select value={form.sport} onChange={e => setForm({...form, sport: e.target.value})}>
-                {SPORTS.map(s => <option key={s}>{s}</option>)}
-              </select>
+            <div>
+              <label>Partido (escribe "Equipo A vs Equipo B" o usa los campos)</label>
+              <input value={form.eventText} onChange={e => handleEventText(e.target.value)} placeholder="Real Madrid vs Barcelona"/>
             </div>
-            <div><label>Selección / Pick</label><input value={form.pick} onChange={e => setForm({...form, pick: e.target.value})} placeholder="Madrid gana"/></div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div><label>Local</label><input value={form.home} onChange={e => setForm({...form, home: e.target.value})} placeholder="Real Madrid"/></div>
+              <div><label>Visitante</label><input value={form.away} onChange={e => setForm({...form, away: e.target.value})} placeholder="Barcelona"/></div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <div><label>Deporte</label>
+                <select value={form.sport} onChange={e => setForm({...form, sport: e.target.value})}>
+                  {SPORTS.map(s => <option key={s}>{s}</option>)}
+                </select>
+              </div>
+              <div><label>Mercado</label>
+                <select value={form.market} onChange={e => setForm({...form, market: e.target.value})}>
+                  {MARKETS.map(m => <option key={m}>{m}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10 }}>
+              <div><label>Pick / Selección</label><input value={form.pick} onChange={e => setForm({...form, pick: e.target.value})} placeholder="Madrid gana"/></div>
+              <div><label>Línea</label><input value={form.line} onChange={e => setForm({...form, line: e.target.value})} placeholder="2+ / -1.5"/></div>
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-              <div><label>Cuota</label><input type="number" step="0.01" inputMode="decimal" value={form.odds} onChange={e => setForm({...form, odds: e.target.value})} placeholder="2.50"/></div>
+              <div><label>Momio</label><input type="text" inputMode="numeric" value={form.odds} onChange={e => setForm({...form, odds: e.target.value})} placeholder="+150 / -200"/></div>
               <div><label>Apuesta $</label><input type="number" step="0.01" inputMode="decimal" value={form.stake} onChange={e => setForm({...form, stake: e.target.value})} placeholder="100"/></div>
             </div>
           </>
-        ) : (
+        )}
+
+        {mode === 'parlay' && (
           <>
+            <div style={{ padding: 10, background: 'rgba(212,175,55,0.06)', borderRadius: 8, fontSize: 11, color: '#9ca39a', textAlign: 'center' }}>
+              Apuesta con varias selecciones de diferentes partidos
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {selections.map((sel, i) => (
-                <div key={i} style={{ padding: 12, background: 'rgba(0,0,0,0.3)', borderRadius: 10, border: '1px solid rgba(212,175,55,0.1)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                    <div className="mono gold" style={{ fontSize: 10, letterSpacing: '0.1em' }}>SELECCIÓN {i + 1}</div>
-                    {selections.length > 2 && (
-                      <button onClick={() => removeSel(i)} style={{ background: 'transparent', border: 'none', color: '#f87171', cursor: 'pointer', padding: 2 }}><Trash2 size={14}/></button>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    <input value={sel.event} onChange={e => updateSel(i, 'event', e.target.value)} placeholder="Evento" style={{ fontSize: 13, padding: '8px 10px' }}/>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                      <select value={sel.sport} onChange={e => updateSel(i, 'sport', e.target.value)} style={{ fontSize: 13, padding: '8px 10px' }}>
-                        {SPORTS.map(s => <option key={s}>{s}</option>)}
-                      </select>
-                      <input type="number" step="0.01" inputMode="decimal" value={sel.odds} onChange={e => updateSel(i, 'odds', e.target.value)} placeholder="Cuota" style={{ fontSize: 13, padding: '8px 10px' }}/>
-                    </div>
-                    <input value={sel.pick} onChange={e => updateSel(i, 'pick', e.target.value)} placeholder="Pick" style={{ fontSize: 13, padding: '8px 10px' }}/>
-                  </div>
-                </div>
+                <SelectionFields
+                  key={i}
+                  sel={{ ...sel, __label: `SELECCIÓN ${i + 1}` }}
+                  onChange={(field, val) => updateSel(i, field, val)}
+                  onRemove={() => removeSel(i)}
+                  showRemove={selections.length > 2}
+                  showSport={true}
+                />
               ))}
             </div>
             <button onClick={addSel} style={{ padding: 10, background: 'transparent', border: '1px dashed rgba(212,175,55,0.3)', color: '#d4af37', borderRadius: 10, fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
@@ -130,8 +210,48 @@ export function BetModal({ onClose, onSave, defaultBookmaker, bankroll }) {
           </>
         )}
 
+        {mode === 'sgp' && (
+          <>
+            <div style={{ padding: 10, background: 'rgba(212,175,55,0.06)', borderRadius: 8, fontSize: 11, color: '#9ca39a', textAlign: 'center' }}>
+              Same-Game Parlay: varias selecciones del mismo partido
+            </div>
+            <div style={{ padding: 12, background: 'rgba(0,0,0,0.3)', borderRadius: 10, border: '1px solid rgba(212,175,55,0.15)' }}>
+              <div className="mono gold" style={{ fontSize: 10, letterSpacing: '0.1em', marginBottom: 10 }}>PARTIDO</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+                <input value={sgpMatch.home} onChange={e => setSgpMatch({...sgpMatch, home: e.target.value})} placeholder="Local" style={{ fontSize: 13, padding: '8px 10px' }}/>
+                <input value={sgpMatch.away} onChange={e => setSgpMatch({...sgpMatch, away: e.target.value})} placeholder="Visitante" style={{ fontSize: 13, padding: '8px 10px' }}/>
+              </div>
+              <select value={sgpMatch.sport} onChange={e => setSgpMatch({...sgpMatch, sport: e.target.value})} style={{ fontSize: 13, padding: '8px 10px' }}>
+                {SPORTS.map(s => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {selections.map((sel, i) => (
+                <SelectionFields
+                  key={i}
+                  sel={{ ...sel, __label: `PICK ${i + 1}` }}
+                  onChange={(field, val) => updateSel(i, field, val)}
+                  onRemove={() => removeSel(i)}
+                  showRemove={selections.length > 2}
+                  showSport={false}
+                  compact={true}
+                />
+              ))}
+            </div>
+            <button onClick={addSel} style={{ padding: 10, background: 'transparent', border: '1px dashed rgba(212,175,55,0.3)', color: '#d4af37', borderRadius: 10, fontSize: 12, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+              <Plus size={14}/> Añadir pick
+            </button>
+            <div style={{ padding: 12, background: 'rgba(212,175,55,0.08)', borderRadius: 10, textAlign: 'center' }}>
+              <div className="mono" style={{ fontSize: 9, color: '#9ca39a', letterSpacing: '0.15em' }}>CUOTA TOTAL SGP</div>
+              <div className="display gold" style={{ fontSize: 28 }}>{fmt.odds(parlayOdds)}</div>
+              <div className="mono" style={{ fontSize: 9, color: '#9ca39a' }}>({parlayOdds.toFixed(2)} decimal)</div>
+            </div>
+            <div><label>Apuesta $</label><input type="number" step="0.01" inputMode="decimal" value={form.stake} onChange={e => setForm({...form, stake: e.target.value})} placeholder="100"/></div>
+          </>
+        )}
+
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-          <div><label>Casa de apuestas</label><input value={form.bookmaker} onChange={e => setForm({...form, bookmaker: e.target.value})} placeholder="Bet365"/></div>
+          <div><label>Casa de apuestas</label><input value={form.bookmaker} onChange={e => setForm({...form, bookmaker: e.target.value})} placeholder="Winpot"/></div>
           <div><label>Fecha</label><input type="date" value={form.date} onChange={e => setForm({...form, date: e.target.value})}/></div>
         </div>
 
@@ -226,19 +346,30 @@ export function TicketModal({ onClose, onSave, apiKey, openSettings, defaultBook
         role: 'user',
         content: [
           { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageData } },
-          { type: 'text', text: `Analiza este ticket de apuesta deportiva. Detecta si es apuesta simple o combinada (parlay/multiple).
+          { type: 'text', text: `Analiza este ticket de apuesta deportiva. Detecta si es apuesta SIMPLE, PARLAY (varias selecciones de partidos diferentes) o SGP (Same-Game Parlay: varias selecciones del mismo partido).
 
-Si es SIMPLE devuelve: {"type":"single","event":"equipo vs equipo","sport":"Fútbol|Basketball|Tenis|Béisbol|NFL|MMA|Boxeo|Hockey|Otro","pick":"selección","odds":2.50,"stake":100,"bookmaker":"nombre casa"}
+Si es SIMPLE devuelve: {"type":"single","home":"equipo local","away":"equipo visitante","sport":"Fútbol|Basketball|Tenis|Béisbol|NFL|MMA|Boxeo|Hockey|Otro","market":"Ganador|Ganador (incl. extra innings)|Hándicap|Over / Under|Ambos anotan|Prop jugador|Primera mitad|Marcador exacto|Otro","line":"línea si hay (ej: 2+, más de 1.5)","pick":"selección apostada","odds":2.50,"stake":100,"bookmaker":"casa"}
 
-Si es COMBINADA devuelve: {"type":"parlay","selections":[{"event":"...","sport":"...","pick":"...","odds":1.50},{"event":"...","sport":"...","pick":"...","odds":2.00}],"stake":100,"bookmaker":"nombre casa"}
+Si es PARLAY devuelve: {"type":"parlay","selections":[{"home":"...","away":"...","sport":"...","market":"...","line":"","pick":"...","odds":1.50},...],"stake":100,"bookmaker":"casa"}
 
-Devuelve SOLO el JSON, sin markdown ni texto adicional. Todos los números deben ser números, no strings.` }
+Si es SGP devuelve: {"type":"sgp","home":"equipo local","away":"equipo visitante","sport":"...","selections":[{"market":"...","line":"2+","pick":"...","odds":2.50},...],"stake":100,"bookmaker":"casa"}
+
+Para el campo 'line' separa la línea del pick. Ejemplo: si el ticket dice "Más de 1.5 - Remates a puerta Diallo", el market es "Prop jugador", pick es "Remates a puerta Diallo" y line es "Más de 1.5".
+
+Las cuotas (odds) SIEMPRE deben estar en formato DECIMAL (ej: 2.50, no +150). Si el ticket las muestra en americano conviértelas: +150 → 2.50, -200 → 1.50.
+
+Devuelve SOLO el JSON, sin markdown ni texto adicional.` }
         ]
       }]);
       const text = data.content.map(c => c.text || '').join('').replace(/```json|```/g, '').trim();
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       const obj = JSON.parse(jsonMatch ? jsonMatch[0] : text);
       if (!obj.bookmaker && defaultBookmaker) obj.bookmaker = defaultBookmaker;
+      // Convert decimal odds to American for display/editing
+      if (obj.odds) obj.odds = toAmerican(obj.odds);
+      if (obj.selections) {
+        obj.selections = obj.selections.map(s => ({ ...s, odds: s.odds ? toAmerican(s.odds) : '' }));
+      }
       setParsed(obj);
     } catch (err) {
       setError('No se pudo leer el ticket. Verifica tu API key o intenta con una foto más clara.');
@@ -257,13 +388,39 @@ Devuelve SOLO el JSON, sin markdown ni texto adicional. Todos los números deben
       notes: '',
     };
     if (parsed.type === 'parlay') {
-      onSave({ ...base, type: 'parlay', selections: parsed.selections.map(s => ({ ...s, odds: parseFloat(s.odds) })) });
+      onSave({ ...base, type: 'parlay', selections: parsed.selections.map(s => ({ ...s, odds: fromAmerican(s.odds) })) });
+    } else if (parsed.type === 'sgp') {
+      onSave({
+        ...base,
+        type: 'sgp',
+        home: parsed.home,
+        away: parsed.away,
+        sport: parsed.sport,
+        selections: parsed.selections.map(s => ({
+          ...s,
+          home: parsed.home,
+          away: parsed.away,
+          sport: parsed.sport,
+          odds: fromAmerican(s.odds),
+        })),
+      });
     } else {
-      onSave({ ...base, type: 'single', event: parsed.event, sport: parsed.sport, pick: parsed.pick, odds: parseFloat(parsed.odds) });
+      onSave({
+        ...base,
+        type: 'single',
+        home: parsed.home || '',
+        away: parsed.away || '',
+        sport: parsed.sport,
+        market: parsed.market || 'Ganador',
+        line: parsed.line || '',
+        pick: parsed.pick,
+        odds: fromAmerican(parsed.odds),
+      });
     }
   };
 
   const isParlay = parsed?.type === 'parlay';
+  const isSGP = parsed?.type === 'sgp';
 
   return (
     <ModalShell onClose={onClose} title="LECTURA DE TICKET">
@@ -296,31 +453,63 @@ Devuelve SOLO el JSON, sin markdown ni texto adicional. Todos los números deben
         {parsed && (
           <>
             <div style={{ padding: 14, background: 'rgba(74,222,128,0.08)', border: '1px solid rgba(74,222,128,0.3)', borderRadius: 10, fontSize: 12, color: '#4ade80' }}>
-              ✓ Ticket leído como {isParlay ? 'COMBINADA' : 'SIMPLE'}. Verifica.
+              ✓ Ticket leído como {isParlay ? 'PARLAY' : isSGP ? 'SGP' : 'SIMPLE'}. Verifica y edita.
             </div>
-            {isParlay ? (
+            {isSGP && (
+              <div style={{ padding: 12, background: 'rgba(0,0,0,0.3)', borderRadius: 10 }}>
+                <div className="mono gold" style={{ fontSize: 10, marginBottom: 8 }}>PARTIDO</div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <input value={parsed.home || ''} onChange={e => setParsed({...parsed, home: e.target.value})} placeholder="Local" style={{ fontSize: 13 }}/>
+                  <input value={parsed.away || ''} onChange={e => setParsed({...parsed, away: e.target.value})} placeholder="Visitante" style={{ fontSize: 13 }}/>
+                </div>
+                <select value={parsed.sport || 'Fútbol'} onChange={e => setParsed({...parsed, sport: e.target.value})} style={{ fontSize: 13, marginTop: 8 }}>
+                  {SPORTS.map(s => <option key={s}>{s}</option>)}
+                </select>
+              </div>
+            )}
+            {(isParlay || isSGP) ? (
               <>
                 {parsed.selections.map((sel, i) => (
                   <div key={i} style={{ padding: 12, background: 'rgba(0,0,0,0.3)', borderRadius: 10 }}>
-                    <div className="mono gold" style={{ fontSize: 10, marginBottom: 8 }}>SELECCIÓN {i + 1}</div>
-                    <input value={sel.event} onChange={e => { const n = {...parsed}; n.selections[i].event = e.target.value; setParsed(n); }} style={{ marginBottom: 6, fontSize: 13 }}/>
-                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 6 }}>
-                      <input value={sel.pick} onChange={e => { const n = {...parsed}; n.selections[i].pick = e.target.value; setParsed(n); }} placeholder="Pick" style={{ fontSize: 13 }}/>
-                      <input type="number" step="0.01" value={sel.odds} onChange={e => { const n = {...parsed}; n.selections[i].odds = e.target.value; setParsed(n); }} style={{ fontSize: 13 }}/>
+                    <div className="mono gold" style={{ fontSize: 10, marginBottom: 8 }}>{isSGP ? `PICK ${i + 1}` : `SELECCIÓN ${i + 1}`}</div>
+                    {isParlay && (
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
+                        <input value={sel.home || ''} onChange={e => { const n = {...parsed}; n.selections[i].home = e.target.value; setParsed(n); }} placeholder="Local" style={{ fontSize: 13 }}/>
+                        <input value={sel.away || ''} onChange={e => { const n = {...parsed}; n.selections[i].away = e.target.value; setParsed(n); }} placeholder="Visitante" style={{ fontSize: 13 }}/>
+                      </div>
+                    )}
+                    <select value={sel.market || 'Ganador'} onChange={e => { const n = {...parsed}; n.selections[i].market = e.target.value; setParsed(n); }} style={{ fontSize: 13, marginBottom: 6 }}>
+                      {MARKETS.map(m => <option key={m}>{m}</option>)}
+                    </select>
+                    <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 6, marginBottom: 6 }}>
+                      <input value={sel.pick || ''} onChange={e => { const n = {...parsed}; n.selections[i].pick = e.target.value; setParsed(n); }} placeholder="Pick" style={{ fontSize: 13 }}/>
+                      <input value={sel.line || ''} onChange={e => { const n = {...parsed}; n.selections[i].line = e.target.value; setParsed(n); }} placeholder="Línea" style={{ fontSize: 13 }}/>
                     </div>
+                    <input type="text" inputMode="numeric" value={sel.odds || ''} onChange={e => { const n = {...parsed}; n.selections[i].odds = e.target.value; setParsed(n); }} placeholder="+150 / -200" style={{ fontSize: 13 }}/>
                   </div>
                 ))}
               </>
             ) : (
               <>
-                <div><label>Evento</label><input value={parsed.event} onChange={e => setParsed({...parsed, event: e.target.value})}/></div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                  <div><label>Local</label><input value={parsed.home || ''} onChange={e => setParsed({...parsed, home: e.target.value})}/></div>
+                  <div><label>Visitante</label><input value={parsed.away || ''} onChange={e => setParsed({...parsed, away: e.target.value})}/></div>
+                </div>
                 <div><label>Deporte</label>
-                  <select value={parsed.sport} onChange={e => setParsed({...parsed, sport: e.target.value})}>
+                  <select value={parsed.sport || 'Fútbol'} onChange={e => setParsed({...parsed, sport: e.target.value})}>
                     {SPORTS.map(s => <option key={s}>{s}</option>)}
                   </select>
                 </div>
-                <div><label>Pick</label><input value={parsed.pick} onChange={e => setParsed({...parsed, pick: e.target.value})}/></div>
-                <div><label>Cuota</label><input type="number" step="0.01" value={parsed.odds} onChange={e => setParsed({...parsed, odds: e.target.value})}/></div>
+                <div><label>Mercado</label>
+                  <select value={parsed.market || 'Ganador'} onChange={e => setParsed({...parsed, market: e.target.value})}>
+                    {MARKETS.map(m => <option key={m}>{m}</option>)}
+                  </select>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10 }}>
+                  <div><label>Pick</label><input value={parsed.pick || ''} onChange={e => setParsed({...parsed, pick: e.target.value})}/></div>
+                  <div><label>Línea</label><input value={parsed.line || ''} onChange={e => setParsed({...parsed, line: e.target.value})}/></div>
+                </div>
+                <div><label>Momio</label><input type="text" inputMode="numeric" value={parsed.odds || ''} onChange={e => setParsed({...parsed, odds: e.target.value})} placeholder="+150 / -200"/></div>
               </>
             )}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -446,6 +635,49 @@ export function SettingsModal({ onClose, apiKey, onSave, limits, onLimitsChange,
   );
 }
 
+export function WinBonusModal({ bet, onClose, onSave }) {
+  const [bonus, setBonus] = useState('');
+  const basePotential = bet.stake * (betOdds(bet) - 1);
+  const bonusNum = parseFloat(bonus) || 0;
+  const totalProfit = basePotential + bonusNum;
+
+  const confirm = () => {
+    onSave({ ...bet, status: 'won', bonus: bonusNum });
+  };
+
+  return (
+    <ModalShell onClose={onClose} title="APUESTA GANADA">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <div style={{ padding: 14, background: 'rgba(74,222,128,0.08)', border: '1px solid rgba(74,222,128,0.3)', borderRadius: 10, textAlign: 'center' }}>
+          <div className="mono" style={{ fontSize: 9, color: '#4ade80', letterSpacing: '0.15em', marginBottom: 4 }}>GANANCIA BASE</div>
+          <div className="display" style={{ fontSize: 30, color: '#4ade80' }}>+${basePotential.toFixed(2)}</div>
+        </div>
+
+        <div style={{ padding: 12, background: 'rgba(212,175,55,0.06)', borderRadius: 10, fontSize: 11, color: '#9ca39a', lineHeight: 1.5 }}>
+          Si la casa te dio un bono adicional, ingrésalo aquí. Si no hubo bono, deja en blanco y toca confirmar.
+        </div>
+
+        <div>
+          <label>🎁 Bono recibido (opcional)</label>
+          <input type="number" step="0.01" inputMode="decimal" value={bonus} onChange={e => setBonus(e.target.value)} placeholder="0.00" autoFocus/>
+        </div>
+
+        {bonusNum > 0 && (
+          <div style={{ padding: 14, background: 'rgba(74,222,128,0.12)', border: '1px solid rgba(74,222,128,0.4)', borderRadius: 10, textAlign: 'center' }}>
+            <div className="mono" style={{ fontSize: 9, color: '#4ade80', letterSpacing: '0.15em', marginBottom: 4 }}>GANANCIA TOTAL</div>
+            <div className="display" style={{ fontSize: 34, color: '#4ade80' }}>+${totalProfit.toFixed(2)}</div>
+            <div style={{ fontSize: 10, color: '#9ca39a', marginTop: 4 }}>Base ${basePotential.toFixed(2)} + Bono ${bonusNum.toFixed(2)}</div>
+          </div>
+        )}
+
+        <button onClick={confirm} style={{...styles.primaryBtn, background: 'linear-gradient(180deg, #4ade80, #22c55e)', color: '#0a0d0a'}}>
+          CONFIRMAR GANADA
+        </button>
+      </div>
+    </ModalShell>
+  );
+}
+
 export function CashoutModal({ bet, onClose, onSave }) {
   const [amount, setAmount] = useState('');
   const amountNum = parseFloat(amount) || 0;
@@ -462,7 +694,7 @@ export function CashoutModal({ bet, onClose, onSave }) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <div style={{ padding: 14, background: 'rgba(0,0,0,0.3)', borderRadius: 10 }}>
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
-            {bet.type === 'parlay' ? `Parlay (${bet.selections?.length || 0})` : bet.event}
+            {betTitle(bet)}
           </div>
           <div className="mono" style={{ fontSize: 10, color: '#9ca39a' }}>
             Apostado: ${bet.stake.toFixed(2)} · Ganancia potencial: +${potentialProfit.toFixed(2)}
