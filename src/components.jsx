@@ -1,6 +1,6 @@
 import React from 'react';
 import { X, Trash2 } from 'lucide-react';
-import { fmt, betOdds, betProfit } from './utils';
+import { fmt, betOdds, betProfit, betTitle, selectionTitle, pickLabel } from './utils';
 
 export const styles = {
   primaryBtn: { flex: 1, background: 'linear-gradient(180deg, #d4af37, #b8941f)', color: '#0a0d0a', border: 'none', padding: '14px', borderRadius: 12, fontWeight: 700, fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, cursor: 'pointer' },
@@ -45,7 +45,7 @@ export function ModalShell({ children, onClose, title }) {
   );
 }
 
-export function BetRow({ bet, onUpdate, onDelete, onCashout, compact, onClick }) {
+export function BetRow({ bet, onUpdate, onDelete, onCashout, onWin, compact, onClick }) {
   const statusColor = bet.status === 'won' ? '#4ade80'
     : bet.status === 'lost' ? '#f87171'
     : bet.status === 'cashout' ? (betProfit(bet) > 0 ? '#4ade80' : '#f87171')
@@ -54,61 +54,143 @@ export function BetRow({ bet, onUpdate, onDelete, onCashout, compact, onClick })
   const profit = betProfit(bet);
   const odds = betOdds(bet);
   const isParlay = bet.type === 'parlay';
-  const displayEvent = isParlay ? `Parlay (${bet.selections?.length || 0})` : bet.event;
-  const displayPick = isParlay ? bet.selections?.map(s => s.pick).join(' + ') : bet.pick;
-  const displaySport = isParlay ? 'Combinada' : bet.sport;
+  const isSGP = bet.type === 'sgp';
+  const isMulti = isParlay || isSGP;
+
   const statusLabel = bet.status === 'won' ? 'Ganada'
     : bet.status === 'lost' ? 'Perdida'
     : bet.status === 'cashout' ? 'Cashout'
     : bet.status === 'void' ? 'Anulada'
     : 'Pendiente';
 
+  const typeBadge = isSGP ? 'SGP' : isParlay ? 'PARLAY' : null;
+  const sportIcon = {
+    'Fútbol': '⚽', 'Basketball': '🏀', 'Tenis': '🎾', 'Béisbol': '⚾',
+    'NFL': '🏈', 'MMA': '🥊', 'Boxeo': '🥊', 'Hockey': '🏒', 'Otro': '🎯',
+  };
+
   return (
-    <div onClick={onClick} style={{ padding: '12px 14px', background: 'rgba(0,0,0,0.3)', borderRadius: 10, borderLeft: `3px solid ${statusColor}`, cursor: onClick ? 'pointer' : 'default' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-            {isParlay && <span style={{ fontSize: 9, padding: '2px 6px', background: 'rgba(212,175,55,0.15)', color: '#d4af37', borderRadius: 4, fontWeight: 700 }}>PARLAY</span>}
-            <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayEvent}</div>
+    <div onClick={onClick} style={{ background: 'rgba(0,0,0,0.35)', borderRadius: 12, borderLeft: `3px solid ${statusColor}`, cursor: onClick ? 'pointer' : 'default', overflow: 'hidden' }}>
+      {/* Header */}
+      <div style={{ padding: '12px 14px 10px', borderBottom: isMulti ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, flexWrap: 'wrap' }}>
+              {typeBadge && <span style={{ fontSize: 9, padding: '2px 6px', background: isSGP ? 'rgba(74,222,128,0.15)' : 'rgba(212,175,55,0.15)', color: isSGP ? '#4ade80' : '#d4af37', borderRadius: 4, fontWeight: 700, letterSpacing: '0.05em' }}>{typeBadge}</span>}
+              <div style={{ fontSize: 14, fontWeight: 600, color: '#4ade80' }}>{betTitle(bet)}</div>
+            </div>
+            {!isMulti && bet.market && (
+              <div className="mono" style={{ fontSize: 10, color: '#9ca39a' }}>
+                {bet.market}
+              </div>
+            )}
+            {!isMulti && (bet.line || bet.pick) && (
+              <div style={{ fontSize: 12, color: '#e8e6df', marginTop: 2 }}>
+                {pickLabel(bet.pick, bet.line)}
+              </div>
+            )}
           </div>
-          <div className="mono" style={{ fontSize: 10, color: '#9ca39a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {displaySport} · {displayPick} · {fmt.odds(odds)}
+          <div style={{ textAlign: 'right', flexShrink: 0 }}>
+            {!isMulti && (
+              <div className="display" style={{ fontSize: 16, color: '#d4af37', lineHeight: 1 }}>
+                {fmt.odds(odds)}
+              </div>
+            )}
+            {isMulti && (
+              <div className="display" style={{ fontSize: 16, color: '#d4af37', lineHeight: 1 }}>
+                {fmt.odds(odds)}
+              </div>
+            )}
           </div>
-          {bet.bookmaker && <div className="mono" style={{ fontSize: 9, color: '#7a7f77', marginTop: 2 }}>{bet.bookmaker} · {fmt.date(bet.date)}</div>}
         </div>
-        <div style={{ textAlign: 'right', marginLeft: 10 }}>
-          <div className="display" style={{ fontSize: 16, color: statusColor }}>
-            {bet.status === 'pending' ? `$${bet.stake}` : bet.status === 'void' ? '—' : fmt.moneySign(profit).replace('.00', '')}
+
+        {bet.bookmaker && (
+          <div className="mono" style={{ fontSize: 9, color: '#7a7f77', marginTop: 6, display: 'flex', justifyContent: 'space-between' }}>
+            <span>{sportIcon[bet.sport] || ''} {bet.sport || ''}{bet.bookmaker ? ' · ' + bet.bookmaker : ''}</span>
+            <span>{fmt.date(bet.date)}</span>
           </div>
-          <div className="mono" style={{ fontSize: 9, color: '#9ca39a', textTransform: 'uppercase' }}>{statusLabel}</div>
+        )}
+      </div>
+
+      {/* Selections for multi bets */}
+      {isMulti && bet.selections && !compact && (
+        <div style={{ padding: '8px 14px', background: 'rgba(0,0,0,0.25)' }}>
+          {bet.selections.map((sel, i) => (
+            <div key={i} style={{ padding: '8px 0', borderTop: i > 0 ? '1px solid rgba(255,255,255,0.04)' : 'none' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {!isSGP && <div style={{ fontSize: 12, fontWeight: 600, color: '#4ade80', marginBottom: 2 }}>{selectionTitle(sel)}</div>}
+                  {sel.market && <div className="mono" style={{ fontSize: 9, color: '#9ca39a' }}>{sel.market}</div>}
+                  <div style={{ fontSize: 11, color: '#e8e6df', marginTop: 2 }}>{pickLabel(sel.pick, sel.line)}</div>
+                </div>
+                {sel.odds && (
+                  <div className="mono" style={{ fontSize: 11, color: '#d4af37', flexShrink: 0 }}>
+                    {fmt.odds(sel.odds)}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Footer: stake & result */}
+      <div style={{ padding: '10px 14px', background: 'rgba(0,0,0,0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: isMulti ? '1px solid rgba(255,255,255,0.05)' : 'none' }}>
+        <div>
+          <div className="mono" style={{ fontSize: 9, color: '#7a7f77', letterSpacing: '0.1em' }}>APOSTADO</div>
+          <div style={{ fontSize: 13, color: '#e8e6df', fontWeight: 600 }}>${bet.stake.toFixed(2)}</div>
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <div className="mono" style={{ fontSize: 9, color: '#7a7f77', letterSpacing: '0.1em' }}>{statusLabel.toUpperCase()}</div>
+          <div className="display" style={{ fontSize: 18, color: statusColor }}>
+            {bet.status === 'pending'
+              ? `+$${(bet.stake * (odds - 1)).toFixed(0)}`
+              : bet.status === 'void'
+                ? '—'
+                : fmt.moneySign(profit).replace('.00', '')}
+          </div>
         </div>
       </div>
+
+      {bet.status === 'won' && bet.bonus > 0 && (
+        <div style={{ padding: '6px 14px', background: 'rgba(74,222,128,0.08)', fontSize: 10, color: '#4ade80', display: 'flex', justifyContent: 'space-between' }}>
+          <span>🎁 Bono incluido</span>
+          <span className="mono">+${parseFloat(bet.bonus).toFixed(2)}</span>
+        </div>
+      )}
+
+      {bet.status === 'cashout' && (
+        <div style={{ padding: '6px 14px', background: 'rgba(212,175,55,0.06)', fontSize: 10, color: '#9ca39a', display: 'flex', justifyContent: 'space-between' }}>
+          <span>Cashout recibido</span>
+          <span className="mono">${bet.cashoutAmount?.toFixed(2)}</span>
+        </div>
+      )}
+
       {bet.status === 'pending' && onUpdate && !compact && (
-        <>
-          <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
-            <button onClick={(e) => { e.stopPropagation(); onUpdate('won'); }} style={{ flex: 1, padding: '6px', background: 'rgba(74,222,128,0.15)', border: '1px solid rgba(74,222,128,0.3)', color: '#4ade80', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>GANADA</button>
-            <button onClick={(e) => { e.stopPropagation(); onUpdate('lost'); }} style={{ flex: 1, padding: '6px', background: 'rgba(248,113,113,0.15)', border: '1px solid rgba(248,113,113,0.3)', color: '#f87171', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>PERDIDA</button>
+        <div style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button onClick={(e) => { e.stopPropagation(); onWin ? onWin() : onUpdate('won'); }} style={{ flex: 1, padding: '8px', background: 'rgba(74,222,128,0.15)', border: '1px solid rgba(74,222,128,0.3)', color: '#4ade80', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>GANADA</button>
+            <button onClick={(e) => { e.stopPropagation(); onUpdate('lost'); }} style={{ flex: 1, padding: '8px', background: 'rgba(248,113,113,0.15)', border: '1px solid rgba(248,113,113,0.3)', color: '#f87171', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>PERDIDA</button>
           </div>
-          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-            <button onClick={(e) => { e.stopPropagation(); onCashout && onCashout(); }} style={{ flex: 1, padding: '6px', background: 'rgba(212,175,55,0.15)', border: '1px solid rgba(212,175,55,0.3)', color: '#d4af37', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>CASHOUT</button>
-            <button onClick={(e) => { e.stopPropagation(); onUpdate('void'); }} style={{ flex: 1, padding: '6px', background: 'transparent', border: '1px solid rgba(255,255,255,0.1)', color: '#9ca39a', borderRadius: 6, fontSize: 10, cursor: 'pointer' }}>NULA</button>
-            <button onClick={(e) => { e.stopPropagation(); onDelete(); }} style={{ padding: '6px 10px', background: 'transparent', border: '1px solid rgba(255,255,255,0.1)', color: '#9ca39a', borderRadius: 6, cursor: 'pointer' }}><Trash2 size={12}/></button>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button onClick={(e) => { e.stopPropagation(); onCashout && onCashout(); }} style={{ flex: 1, padding: '6px', background: 'rgba(212,175,55,0.1)', border: '1px solid rgba(212,175,55,0.25)', color: '#d4af37', borderRadius: 6, fontSize: 10, fontWeight: 600, cursor: 'pointer' }}>CASHOUT</button>
+            <button onClick={(e) => { e.stopPropagation(); onUpdate('void'); }} style={{ flex: 1, padding: '6px', background: 'transparent', border: '1px solid rgba(255,255,255,0.08)', color: '#9ca39a', borderRadius: 6, fontSize: 10, cursor: 'pointer' }}>NULA</button>
+            <button onClick={(e) => { e.stopPropagation(); onDelete(); }} style={{ padding: '6px 10px', background: 'transparent', border: '1px solid rgba(255,255,255,0.08)', color: '#9ca39a', borderRadius: 6, cursor: 'pointer' }}><Trash2 size={12}/></button>
           </div>
-        </>
+        </div>
       )}
       {bet.status !== 'pending' && onDelete && !compact && (
-        <button onClick={(e) => { e.stopPropagation(); onDelete(); }} style={{ marginTop: 8, padding: '4px 10px', background: 'transparent', border: '1px solid rgba(255,255,255,0.08)', color: '#9ca39a', borderRadius: 6, fontSize: 10, cursor: 'pointer' }}>
-          <Trash2 size={11} style={{ verticalAlign: 'middle' }}/> Eliminar
-        </button>
-      )}
-      {bet.status === 'cashout' && !compact && (
-        <div style={{ marginTop: 8, padding: 8, background: 'rgba(212,175,55,0.06)', borderRadius: 6, fontSize: 11, color: '#9ca39a' }}>
-          Cashout: ${bet.cashoutAmount?.toFixed(2)} · Apostado: ${bet.stake.toFixed(2)}
+        <div style={{ padding: '6px 14px 10px' }}>
+          <button onClick={(e) => { e.stopPropagation(); onDelete(); }} style={{ padding: '4px 10px', background: 'transparent', border: '1px solid rgba(255,255,255,0.08)', color: '#9ca39a', borderRadius: 6, fontSize: 10, cursor: 'pointer' }}>
+            <Trash2 size={11} style={{ verticalAlign: 'middle' }}/> Eliminar
+          </button>
         </div>
       )}
       {bet.notes && !compact && (
-        <div style={{ marginTop: 8, padding: 8, background: 'rgba(255,255,255,0.03)', borderRadius: 6, fontSize: 11, color: '#9ca39a', fontStyle: 'italic' }}>
-          💭 {bet.notes}
+        <div style={{ padding: '6px 14px 10px' }}>
+          <div style={{ padding: 8, background: 'rgba(255,255,255,0.03)', borderRadius: 6, fontSize: 11, color: '#9ca39a', fontStyle: 'italic' }}>
+            💭 {bet.notes}
+          </div>
         </div>
       )}
     </div>
