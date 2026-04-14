@@ -24,6 +24,18 @@ export async function callClaude(apiKey, messages, max_tokens = 1000) {
 
 // Constants
 export const SPORTS = ['Fútbol', 'Basketball', 'Tenis', 'Béisbol', 'NFL', 'MMA', 'Boxeo', 'Hockey', 'Otro'];
+export const MARKETS = [
+  'Ganador',
+  'Ganador (incl. extra innings)',
+  'Over/Under',
+  'Hándicap',
+  'Ambos anotan',
+  'Doble oportunidad',
+  'Marcador exacto',
+  'Prop jugador',
+  'Prop equipo',
+  'Otro',
+];
 export const MOODS = [
   { emoji: '🔥', label: 'Pleno', value: 'focused' },
   { emoji: '😌', label: 'Tranquilo', value: 'calm' },
@@ -31,6 +43,14 @@ export const MOODS = [
   { emoji: '😤', label: 'Frustrado', value: 'tilted' },
   { emoji: '😵', label: 'Perdido', value: 'chasing' },
 ];
+
+// Parse "Team A vs Team B" into home/away
+export function parseVs(text) {
+  if (!text) return { home: '', away: '' };
+  const m = text.match(/^(.+?)\s+vs\.?\s+(.+)$/i);
+  if (m) return { home: m[1].trim(), away: m[2].trim() };
+  return { home: text.trim(), away: '' };
+}
 
 // Convert decimal odds to American format
 export function toAmerican(decimal) {
@@ -41,6 +61,35 @@ export function toAmerican(decimal) {
   } else {
     return '-' + Math.round(100 / (d - 1));
   }
+}
+
+// Convert American odds to decimal
+// Accepts: "+150", "-200", "150" (positive implied), "+100" (even), etc.
+// Returns decimal (e.g., 2.50) or 0 if invalid
+export function fromAmerican(american) {
+  if (american === null || american === undefined || american === '') return 0;
+  const str = String(american).trim().replace(/\s+/g, '');
+  if (!str) return 0;
+  // Parse the sign + number
+  const match = str.match(/^([+-]?)(\d+(?:\.\d+)?)$/);
+  if (!match) return 0;
+  const sign = match[1] || '+';
+  const num = parseFloat(match[2]);
+  if (!num || num < 100) return 0; // American odds minimum is +100 / -100
+  if (sign === '+') {
+    return +(1 + num / 100).toFixed(4);
+  } else {
+    return +(1 + 100 / num).toFixed(4);
+  }
+}
+
+// Validates an American odds string (for input validation)
+export function isValidAmerican(str) {
+  if (!str) return false;
+  const trimmed = String(str).trim();
+  if (!/^[+-]?\d+(?:\.\d+)?$/.test(trimmed)) return false;
+  const decimal = fromAmerican(trimmed);
+  return decimal > 1; // must produce a valid decimal odd > 1
 }
 
 // Format helpers
@@ -54,22 +103,23 @@ export const fmt = {
 };
 
 // Bet calculations
-// A bet has: stake, status ('pending'|'won'|'lost'|'void'), and either:
-//   - single: odds (single selection)
-//   - parlay: selections (array of {event, sport, pick, odds}), totalOdds is product
+// A bet has: stake, status ('pending'|'won'|'lost'|'void'|'cashout'), bonus (optional), and:
+//   - single: odds
+//   - parlay/sgp: selections[] with odds each (parlay multiplies, sgp can use totalOdds override)
 export function betOdds(bet) {
-  if (bet.type === 'parlay' && bet.selections) {
+  if ((bet.type === 'parlay' || bet.type === 'sgp') && bet.selections) {
+    if (bet.totalOdds) return parseFloat(bet.totalOdds);
     return bet.selections.reduce((p, s) => p * parseFloat(s.odds || 1), 1);
   }
   return parseFloat(bet.odds || 0);
 }
 export function betReturn(bet) {
-  if (bet.status === 'won') return bet.stake * betOdds(bet);
+  if (bet.status === 'won') return bet.stake * betOdds(bet) + (parseFloat(bet.bonus) || 0);
   if (bet.status === 'cashout') return bet.cashoutAmount || 0;
   return 0;
 }
 export function betProfit(bet) {
-  if (bet.status === 'won') return bet.stake * (betOdds(bet) - 1);
+  if (bet.status === 'won') return bet.stake * (betOdds(bet) - 1) + (parseFloat(bet.bonus) || 0);
   if (bet.status === 'lost') return -bet.stake;
   if (bet.status === 'cashout') return (bet.cashoutAmount || 0) - bet.stake;
   return 0;
@@ -196,16 +246,43 @@ export function kellyStake(bankroll, odds, winProb, fraction = 0.25) {
 }
 
 // CSV export
+// Display helpers
+export function betTitle(bet) {
+  if (bet.type === 'sgp' && bet.home && bet.away) return `SGP: ${bet.home} vs ${bet.away}`;
+  if (bet.type === 'parlay') return `Parlay (${bet.selections?.length || 0})`;
+  if (bet.home && bet.away) return `${bet.home} vs ${bet.away}`;
+  return bet.event || '—';
+}
+
+export function selectionTitle(sel) {
+  if (sel.home && sel.away) return `${sel.home} vs ${sel.away}`;
+  return sel.event || '—';
+}
+
+export function pickLabel(pick, line) {
+  const parts = [];
+  if (line) parts.push(line);
+  if (pick) parts.push(pick);
+  return parts.join(' ');
+}
+
 export function toCSV(bets) {
-  const headers = ['id', 'date', 'type', 'event', 'sport', 'bookmaker', 'pick', 'odds', 'stake', 'status', 'profit', 'notes'];
+  const headers = ['id', 'date', 'type', 'home', 'away', 'event', 'sport', 'bookmaker', 'market', 'line', 'pick', 'odds', 'stake', 'status', 'bonus', 'cashout', 'profit', 'notes'];
   const rows = bets.map(b => [
     b.id, b.date, b.type || 'single',
-    (b.type === 'parlay' ? b.selections?.map(s => s.event).join(' | ') : b.event) || '',
+    b.home || '', b.away || '',
+    betTitle(b),
     (b.type === 'parlay' ? b.selections?.map(s => s.sport).join(' | ') : b.sport) || '',
     b.bookmaker || '',
-    (b.type === 'parlay' ? b.selections?.map(s => s.pick).join(' | ') : b.pick) || '',
+    b.market || '',
+    b.line || '',
+    (b.type === 'parlay' || b.type === 'sgp' ? b.selections?.map(s => s.pick).join(' | ') : b.pick) || '',
     betOdds(b).toFixed(2),
-    b.stake, b.status, betProfit(b).toFixed(2), (b.notes || '').replace(/"/g, '""'),
+    b.stake, b.status,
+    b.bonus || '',
+    b.cashoutAmount || '',
+    betProfit(b).toFixed(2),
+    (b.notes || '').replace(/"/g, '""'),
   ]);
   return [headers, ...rows].map(r => r.map(c => `"${c}"`).join(',')).join('\n');
 }
